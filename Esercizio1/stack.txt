@@ -1,0 +1,13 @@
+angelo_della_morte()
+0x0
+bastone()
+0x0
+cane()
+adress_of_shell[]
+gatto()
+0x0b
+topo()
+aaaa
+aaaa
+aaaa
+due\0
