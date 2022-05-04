@@ -6,8 +6,13 @@ cane()
 adress_of_shell[]
 gatto()
 0x0b
-topo()
+topo()  <- ret pointer
 aaaa
 aaaa
 aaaa
-due\0
+due\0 <-
+-
+-
+-
+-
+-
