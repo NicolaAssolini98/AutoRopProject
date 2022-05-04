@@ -11,55 +11,45 @@
 
 char shell[] = "/bin/sh";
 
-void topo()
-{
+void topo() {
     asm("pop %eax");
 }
 
-void macellaio()
-{
+void macellaio() {
     asm("mov %eax, %ecx");
 }
 
-void fuoco()
-{
+void fuoco() {
     asm("pop %edi");
 }
 
-void acqua()
-{
+void acqua() {
     asm("pop %esi");
 }
 
-void gatto()
-{
+void gatto() {
     asm("pop %ebx");
 }
 
-void cane()
-{
+void cane() {
     asm("pop %edx");
 }
 
-void toro()
-{
+void toro() {
     asm("pop %eax");
     asm("pop %ecx");
 }
 
-void angelo_della_morte()
-{
+void angelo_della_morte() {
     asm("int $0x80");
 }
 
-void bastone()
-{
+void bastone() {
     asm("pop %ecx");
 }
 
 
-int main()
-{
+int main() {
     setvbuf(stdin, 0, 2, 0);
     setvbuf(stdout, 0, 2, 0);
     
