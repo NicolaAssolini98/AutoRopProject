@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from persistent import Persistent
 
+
+
 class Gadget(Persistent):
     """
     Describes a ROP gadget
