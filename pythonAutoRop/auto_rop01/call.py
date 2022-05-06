@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """Abstracting ROP calls
 """
-from ..context import context
-from ..util import packing
-from ..abi   import ABI
+
+from pefile import long
+from pwnlib.abi import ABI
+from pwnlib.context import context
+from pwnlib.util import packing
+
+context.arch = 'amd64'
+
 class Unresolved(object):
     """
     Encapsulates logic for deferring evaluation of a value used

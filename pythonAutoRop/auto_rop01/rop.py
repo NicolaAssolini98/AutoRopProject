@@ -197,27 +197,21 @@ import re
 import sys
 import tempfile
 import random
+from logging import getLogger
+
 import networkx
 
 from multiprocessing import Pool, cpu_count
-from itertools  import repeat
-from operator   import itemgetter
-from copy       import deepcopy
+from itertools import repeat
+from pwn import *
 
-from ..         import abi
-from ..         import constants
-
-from ..context  import context, LocalContext
-from ..elf      import ELF
-from ..log      import getLogger
-from ..util     import cyclic
-from ..util     import lists
-from ..util     import packing
 from . import srop
-from pythonAutoRop.auto_rop01.call import Call, StackAdjustment, AppendedArgument, CurrentStackPointer, NextGadgetAddress
+from pythonAutoRop.auto_rop01.call import Call, StackAdjustment, AppendedArgument, CurrentStackPointer, \
+    NextGadgetAddress
 from pythonAutoRop.auto_rop01.gadgets import Gadget, Mem
 from pythonAutoRop.auto_rop01.gadgetfinder import GadgetFinder, GadgetSolver
-from ..util.packing import *
+
+context.arch = 'amd64'
 
 log = getLogger(__name__)
 __all__ = ['ROP']
@@ -227,6 +221,7 @@ class Padding(object):
     """
     Placeholder for exactly one pointer-width of padding.
     """
+
 
 class DescriptiveStack(list):
     """
@@ -242,13 +237,13 @@ class DescriptiveStack(list):
 
     def __init__(self, address):
         self.descriptions = collections.defaultdict(lambda: [])
-        self.address      = address or 0
+        self.address = address or 0
 
     @property
     def next(self):
         return self.address + len(self) * context.bytes
 
-    def describe(self, text, address = None):
+    def describe(self, text, address=None):
         if address is None:
             address = self.next
         self.descriptions[address] = text
@@ -261,7 +256,7 @@ class DescriptiveStack(list):
             line = '0x%04x:' % addr
             if isinstance(data, str):
                 line += ' %16r' % data
-            elif isinstance(data, (int,long)):
+            elif isinstance(data, (int, long)):
                 line += ' %#16x' % data
                 if self.address != 0 and self.address < data < self.next:
                     off = data - addr
@@ -396,7 +391,7 @@ class ROP(object):
     migrated = False
 
     @LocalContext
-    def __init__(self, elfs, base = None, **kwargs):
+    def __init__(self, elfs, base=None, **kwargs):
         """
         Arguments:
             elfs(list): List of ``pwnlib.elf.ELF`` objects for mining
@@ -417,7 +412,7 @@ class ROP(object):
             log.error("Context arch should be the same as binary arch.")
         self.arch = context.arch
 
-        #Find all gadgets
+        # Find all gadgets
         gf = GadgetFinder(elfs, "all")
         self.gadgets = gf.load_gadgets()
 
@@ -438,345 +433,346 @@ class ROP(object):
         return ROP(ELF.from_bytes(blob, *a, **kw))
 
     def __init_arch_info(self):
-        self.CALL = { "i386"    : "call",
-                      "amd64"   : "call",
-                      "arm"     : "blx"}[self.arch]
-        self.JUMP = { "i386"    : "jmp",
-                      "amd64"   : "jmp",
-                      "arm"     : "bx"}[self.arch]
-        self.PC   = { "i386"    : "eip",
-                      "amd64"   : "rip",
-                      "arm"     : "pc"}[self.arch]
-        self.RET  = { "i386"    : "ret",
-                      "amd64"   : "ret",
-                      "arm"     : "pop"}[self.arch]
-        self.SP   = { "i386"    : "esp",
-                      "amd64"   : "rsp",
-                      "arm"     : "sp"}[self.arch]
-
+        self.CALL = {"i386": "call",
+                     "amd64": "call",
+                     "arm": "blx"}[self.arch]
+        self.JUMP = {"i386": "jmp",
+                     "amd64": "jmp",
+                     "arm": "bx"}[self.arch]
+        self.PC = {"i386": "eip",
+                   "amd64": "rip",
+                   "arm": "pc"}[self.arch]
+        self.RET = {"i386": "ret",
+                    "amd64": "ret",
+                    "arm": "pop"}[self.arch]
+        self.SP = {"i386": "esp",
+                   "amd64": "rsp",
+                   "arm": "sp"}[self.arch]
 
     def setRegisters_print(self, condition):
         for r, gadgets in self.setRegisters(condition).items():
-            print '<setting %s>' % r
+            print('<setting %s>' % r)
             offset = 0
             for g in gadgets:
                 if isinstance(g, Gadget):
-                    print hex(g.address), '; '.join(g.insns)
-                elif isinstance(g, int):  print hex(g)
+                    print(hex(g.address), '; '.join(g.insns))
+                elif isinstance(g, int):
+                    print(hex(g))
                 elif isinstance(g, Padding):
-                    print self.generatePadding(offset,context.bytes)
+                    print(self.generatePadding(offset, context.bytes))
                     offset += context.bytes
+                else:
+                    print(g)
 
-                else: print g
 
-    def setRegisters(self, values):
-        """
-        Provides a sequence of ROP gadgets which will set the desired register
-        values.
+def setRegisters(self, values):
+    """
+    Provides a sequence of ROP gadgets which will set the desired register
+    values.
 
-        Arguments:
+    Arguments:
 
-            values(dict):
-                Mapping of ``{register name: value}``.  The contents of
-                ``value`` can be any object, not just an integer.
+        values(dict):
+            Mapping of ``{register name: value}``.  The contents of
+            ``value`` can be any object, not just an integer.
 
-        Return Value:
+    Return Value:
 
-            Returns a ``collections.OrderedDict`` object which is in the
-            correct order of operations.
+        Returns a ``collections.OrderedDict`` object which is in the
+        correct order of operations.
 
-            The keys are the register names, and the values are the sequence
-            of stack values necessary to set the register.
+        The keys are the register names, and the values are the sequence
+        of stack values necessary to set the register.
 
-        Example:
+    Example:
 
-            Example for i386:
+        Example for i386:
 
-            >>> context.clear(arch='i386')
-            >>> assembly  = 'pop eax; ret;'
-            >>> assembly += 'mov ebx, eax; ret;'
-            >>> assembly += 'pop ecx; call eax'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> con = {'eax':1, 'ebx':2, 'ecx':3}
-            >>> rop.setRegisters_print(con)
-            <setting ecx>
-            0x10000000 pop eax; ret
-            0x10000000
-            0x10000005 pop ecx; call eax
-            0x3
-            <setting ebx>
-            0x10000000 pop eax; ret
-            0x2
-            0x10000002 mov ebx, eax; ret
-            <setting eax>
-            0x10000000 pop eax; ret
-            0x1
+        >>> context.clear(arch='i386')
+        >>> assembly  = 'pop eax; ret;'
+        >>> assembly += 'mov ebx, eax; ret;'
+        >>> assembly += 'pop ecx; call eax'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> con = {'eax':1, 'ebx':2, 'ecx':3}
+        >>> rop.setRegisters_print(con)
+        <setting ecx>
+        0x10000000 pop eax; ret
+        0x10000000
+        0x10000005 pop ecx; call eax
+        0x3
+        <setting ebx>
+        0x10000000 pop eax; ret
+        0x2
+        0x10000002 mov ebx, eax; ret
+        <setting eax>
+        0x10000000 pop eax; ret
+        0x1
 
-            i386 Example - advance gadget arrangement:
+        i386 Example - advance gadget arrangement:
 
-            >>> context.clear(arch='i386')
-            >>> assembly  = "read:" + shellcraft.read(0, 'esp', 0x1000)
-            >>> assembly += 'pop eax; ret;'
-            >>> assembly += 'xchg edx, ecx; jmp eax;'
-            >>> assembly += 'pop ecx; ret'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> con = {'edx': unpack('_EDX')}
-            >>> rop.setRegisters_print(con)
-            <setting edx>
-            0x10000013 pop ecx; ret
-            0x5844455f
-            0x1000000d pop eax; ret
-            0x1000000e
-            0x1000000f xchg edx, ecx; jmp eax
+        >>> context.clear(arch='i386')
+        >>> assembly  = "read:" + shellcraft.read(0, 'esp', 0x1000)
+        >>> assembly += 'pop eax; ret;'
+        >>> assembly += 'xchg edx, ecx; jmp eax;'
+        >>> assembly += 'pop ecx; ret'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> con = {'edx': unpack('_EDX')}
+        >>> rop.setRegisters_print(con)
+        <setting edx>
+        0x10000013 pop ecx; ret
+        0x5844455f
+        0x1000000d pop eax; ret
+        0x1000000e
+        0x1000000f xchg edx, ecx; jmp eax
 
-            i386 Exmaple - check regs from the same origin:
+        i386 Exmaple - check regs from the same origin:
 
-            >>> context.clear(arch='i386')
-            >>> assembly = 'mov eax, [esp]; pop ebx; ret'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> con = {'eax': 0, 'ebx':1}
-            >>> rop.setRegisters_print(con)
-            <setting eax>
-            0x10000000 mov eax, dword ptr [esp]; pop ebx; ret
-            0x0
-            <setting ebx>
-            0x10000003 pop ebx; ret
-            0x1
+        >>> context.clear(arch='i386')
+        >>> assembly = 'mov eax, [esp]; pop ebx; ret'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> con = {'eax': 0, 'ebx':1}
+        >>> rop.setRegisters_print(con)
+        <setting eax>
+        0x10000000 mov eax, dword ptr [esp]; pop ebx; ret
+        0x0
+        <setting ebx>
+        0x10000003 pop ebx; ret
+        0x1
 
-            i386 Example - handle overlapping ret address.
+        i386 Example - handle overlapping ret address.
 
-            >>> context.clear(arch='i386')
-            >>> assembly  = 'add esp, 0x10; ret;'
-            >>> assembly += 'add esp, 0xc; ret;'
-            >>> assembly += 'add esp, 0x8; ret;'
-            >>> assembly += 'pop eax; ret;'
-            >>> assembly += 'pop ebx; call eax;'
-            >>> assembly += 'mov ecx, ebx; ret;'
-            >>> assembly += 'xchg edx, ecx; jmp eax;'
-            >>> assembly += 'mov edi, [esp+8]; add esp, 4; ret'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> con = {'edi': 0xdeadbeef}
-            >>> rop.setRegisters_print(con)
-            <setting edi>
-            0x10000018 mov edi, dword ptr [esp + 8]; add esp, 4; ret
-            aaaa
-            0x1000000c
-            0xdeadbeef
+        >>> context.clear(arch='i386')
+        >>> assembly  = 'add esp, 0x10; ret;'
+        >>> assembly += 'add esp, 0xc; ret;'
+        >>> assembly += 'add esp, 0x8; ret;'
+        >>> assembly += 'pop eax; ret;'
+        >>> assembly += 'pop ebx; call eax;'
+        >>> assembly += 'mov ecx, ebx; ret;'
+        >>> assembly += 'xchg edx, ecx; jmp eax;'
+        >>> assembly += 'mov edi, [esp+8]; add esp, 4; ret'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> con = {'edi': 0xdeadbeef}
+        >>> rop.setRegisters_print(con)
+        <setting edi>
+        0x10000018 mov edi, dword ptr [esp + 8]; add esp, 4; ret
+        aaaa
+        0x1000000c
+        0xdeadbeef
 
-            i386 Example - complicated example.
+        i386 Example - complicated example.
 
-            >>> context.clear(arch='i386')
-            >>> assembly  = 'pop eax; ret;'
-            >>> assembly += 'pop ebx; call eax;'
-            >>> assembly += 'mov ecx, ebx; ret;'
-            >>> assembly += 'xchg edx, ecx; jmp eax;'
-            >>> assembly += 'mov edi, edx; ret'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> con = {'eax': 1, 'ebx': 2, 'ecx': 3, 'edx': 4}
-            >>> rop.setRegisters_print(con)
-            <setting edx>
-            0x10000000 pop eax; ret
-            0x10000000
-            0x10000002 pop ebx; call eax
-            0x4
-            0x10000005 mov ecx, ebx; ret
-            0x10000008 xchg edx, ecx; jmp eax
-            aaaa
-            <setting ecx>
-            0x10000000 pop eax; ret
-            0x10000000
-            0x10000002 pop ebx; call eax
-            0x3
-            0x10000005 mov ecx, ebx; ret
-            <setting ebx>
-            0x10000000 pop eax; ret
-            0x10000000
-            0x10000002 pop ebx; call eax
-            0x2
-            <setting eax>
-            0x10000000 pop eax; ret
-            0x1
+        >>> context.clear(arch='i386')
+        >>> assembly  = 'pop eax; ret;'
+        >>> assembly += 'pop ebx; call eax;'
+        >>> assembly += 'mov ecx, ebx; ret;'
+        >>> assembly += 'xchg edx, ecx; jmp eax;'
+        >>> assembly += 'mov edi, edx; ret'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> con = {'eax': 1, 'ebx': 2, 'ecx': 3, 'edx': 4}
+        >>> rop.setRegisters_print(con)
+        <setting edx>
+        0x10000000 pop eax; ret
+        0x10000000
+        0x10000002 pop ebx; call eax
+        0x4
+        0x10000005 mov ecx, ebx; ret
+        0x10000008 xchg edx, ecx; jmp eax
+        aaaa
+        <setting ecx>
+        0x10000000 pop eax; ret
+        0x10000000
+        0x10000002 pop ebx; call eax
+        0x3
+        0x10000005 mov ecx, ebx; ret
+        <setting ebx>
+        0x10000000 pop eax; ret
+        0x10000000
+        0x10000002 pop ebx; call eax
+        0x2
+        <setting eax>
+        0x10000000 pop eax; ret
+        0x1
 
-            Example for ARM - advance gadgets arrangement:
+        Example for ARM - advance gadgets arrangement:
 
-            >>> context.clear(arch='arm')
-            >>> assembly  = 'pop {r0, pc};'
-            >>> assembly += 'pop {r0, r1, pc};'
-            >>> assembly += 'pop {r0, r2, pc};'
-            >>> assembly += 'mov r3, r2; pop {pc};'
-            >>> assembly += 'mov r4, r0; blx r1'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> rop.setRegisters_print({'r4': 1})
-            <setting r4>
-            0x10000004 pop {r0, r1, pc}
-            0x1
-            0x10000010
-            0x10000014 mov r4, r0; blx r1
+        >>> context.clear(arch='arm')
+        >>> assembly  = 'pop {r0, pc};'
+        >>> assembly += 'pop {r0, r1, pc};'
+        >>> assembly += 'pop {r0, r2, pc};'
+        >>> assembly += 'mov r3, r2; pop {pc};'
+        >>> assembly += 'mov r4, r0; blx r1'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> rop.setRegisters_print({'r4': 1})
+        <setting r4>
+        0x10000004 pop {r0, r1, pc}
+        0x1
+        0x10000010
+        0x10000014 mov r4, r0; blx r1
 
-            Arm Example 02 - migrate to $sp:
+        Arm Example 02 - migrate to $sp:
 
-            >>> context.clear(arch='arm')
-            >>> assembly  = 'pop {lr};'
-            >>> assembly += 'bx lr'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> rop.setRegisters_print({'pc' : 1})
-            <setting pc>
-            0x10000000 pop {lr}; bx lr
-            0x1
+        >>> context.clear(arch='arm')
+        >>> assembly  = 'pop {lr};'
+        >>> assembly += 'bx lr'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> rop.setRegisters_print({'pc' : 1})
+        <setting pc>
+        0x10000000 pop {lr}; bx lr
+        0x1
 
-            Arm Example 03 - migrate to $sp:
+        Arm Example 03 - migrate to $sp:
 
-            >>> context.clear(arch='arm')
-            >>> assembly = 'pop {pc}'
-            >>> rop = ROP(ELF.from_assembly(assembly))
-            >>> rop.setRegisters_print({'pc' : 0xdeadbeef})
-            <setting pc>
-            0x10000000 pop {pc}
-            0xdeadbeef
-        """
+        >>> context.clear(arch='arm')
+        >>> assembly = 'pop {pc}'
+        >>> rop = ROP(ELF.from_assembly(assembly))
+        >>> rop.setRegisters_print({'pc' : 0xdeadbeef})
+        <setting pc>
+        0x10000000 pop {pc}
+        0xdeadbeef
+    """
 
+    out = []
+
+    # Such as: {path_md5_hash: path}
+    ropgadgets = {}
+
+    # Such as: {path_md5_hash: set(regs)}
+    gadget_list = {}
+
+    # Convert the values into dict format.
+    if isinstance(values, list):
+        values = dict(values)
+
+    def md5_path(path):
         out = []
+        for gadget in path:
+            out.append("; ".join(gadget.insns))
 
-        # Such as: {path_md5_hash: path}
-        ropgadgets = {}
+        return hashlib.md5("|".join(out)).hexdigest()
 
-        # Such as: {path_md5_hash: set(regs)}
-        gadget_list = {}
+    def record(gadget_paths, reg):
+        for path in gadget_paths:
+            path_hash = md5_path(path)
 
-        # Convert the values into dict format.
-        if isinstance(values, list):
-            values = dict(values)
+            ropgadgets[path_hash] = path
 
-        def md5_path(path):
-            out = []
-            for gadget in path:
-                out.append("; ".join(gadget.insns))
+            if path_hash not in gadget_list.keys():
+                gadget_list[path_hash] = set()
+            gadget_list[path_hash].add(reg)
 
-            return hashlib.md5("|".join(out)).hexdigest()
+    for reg, value in values.items():
 
-        def record(gadget_paths, reg):
-            for path in gadget_paths:
-                path_hash= md5_path(path)
+        gadget_paths = self.search_path("sp", [reg])
 
-                ropgadgets[path_hash] = path
-
-                if path_hash not in gadget_list.keys():
-                    gadget_list[path_hash] = set()
-                gadget_list[path_hash].add(reg)
-
-
-        for reg, value in values.items():
-
-            gadget_paths = self.search_path("sp", [reg])
-
-            if not gadget_paths:
-                log.error("Gadget to reg %s not found!" % reg)
-
-            # Combine the same gadgets together.
-            # pop rdi; pop rsi; ret
-            # set rdi = xxx; set rsi = yyy
-            # This gadget will meet these two conditions
-            # No need using two gadgets respectively.
-            record(gadget_paths, reg)
-
+        if not gadget_paths:
+            log.error("Gadget to reg %s not found!" % reg)
 
         # Combine the same gadgets together.
-        # See the comments above.
-        # Sort the dict using two args:
-        #   arg1: number of registers, reverse order.
-        #   arg2: length of path's instructions
-        def re_order(gadget_list, remain_regs=set()):
-            result = collections.OrderedDict()
-            temp = {}
-            for path_hash, regs in gadget_list.items():
-                if remain_regs:
-                    number = len(remain_regs & regs)
-                else:
-                    number = len(regs)
-                temp[path_hash] = number
+        # pop rdi; pop rsi; ret
+        # set rdi = xxx; set rsi = yyy
+        # This gadget will meet these two conditions
+        # No need using two gadgets respectively.
+        record(gadget_paths, reg)
 
-            return collections.OrderedDict(sorted(gadget_list.items(), key=lambda t:(-temp[t[0]],
-                          len("; ".join([ "; ".join(i.insns) for i in ropgadgets[t[0]]])))))
-
-        gadget_list = re_order(gadget_list)
-
-        reg_without_ip = values.keys()
-        remain_regs = set(reg_without_ip)
-        used_regs = set()
-        additional_conditions = {}
-
-        # Try to match a path based on remain registers.
-        # If matched, verify this path, and caculate the remain registers.
-        # If not, continue to match, until there are no paths in gadget_list
-        while True:
-            if gadget_list:
-                path_hash, regs = gadget_list.popitem(0)
+    # Combine the same gadgets together.
+    # See the comments above.
+    # Sort the dict using two args:
+    #   arg1: number of registers, reverse order.
+    #   arg2: length of path's instructions
+    def re_order(gadget_list, remain_regs=set()):
+        result = collections.OrderedDict()
+        temp = {}
+        for path_hash, regs in gadget_list.items():
+            if remain_regs:
+                number = len(remain_regs & regs)
             else:
-                break
+                number = len(regs)
+            temp[path_hash] = number
 
-            if not remain_regs:
-                break
+        return collections.OrderedDict(sorted(gadget_list.items(), key=lambda t: (-temp[t[0]],
+                                                                                  len("; ".join(
+                                                                                      ["; ".join(i.insns) for i in
+                                                                                       ropgadgets[t[0]]])))))
 
-            modified_regs = remain_regs & regs
-            if modified_regs:
-                path = ropgadgets[path_hash]
+    gadget_list = re_order(gadget_list)
 
-                # If two or more regs source from same origin,
-                # Nop and push back this gadget path
-                if self.check_same_origin(path, modified_regs):
-                    gadget_list[path_hash] = regs
-                    continue
+    reg_without_ip = values.keys()
+    remain_regs = set(reg_without_ip)
+    used_regs = set()
+    additional_conditions = {}
 
-                result = self.handle_non_ret_branch(path)
-                if not result:
-                    continue
+    # Try to match a path based on remain registers.
+    # If matched, verify this path, and caculate the remain registers.
+    # If not, continue to match, until there are no paths in gadget_list
+    while True:
+        if gadget_list:
+            path_hash, regs = gadget_list.popitem(0)
+        else:
+            break
 
-                path, return_to_stack_gadget, conditions, additional = result
-                additional_conditions.update(additional)
+        if not remain_regs:
+            break
 
-                # If conditions'key in Gadget's registers.
-                # Handle this conflict.
-                for conflict_key in conditions.keys():
-                    if conflict_key in modified_regs:
-                        modified_regs.remove(conditions.keys()[0])
+        modified_regs = remain_regs & regs
+        if modified_regs:
+            path = ropgadgets[path_hash]
 
-                for reg in modified_regs:
-                    reg64 = reg
+            # If two or more regs source from same origin,
+            # Nop and push back this gadget path
+            if self.check_same_origin(path, modified_regs):
+                gadget_list[path_hash] = regs
+                continue
 
-                    # x64: rax, eax reg[-2:] == ax
-                    if self.arch == "amd64":
-                        reg64 = "r" + reg[-2:]
-                    conditions[reg64] = values[reg]
+            result = self.handle_non_ret_branch(path)
+            if not result:
+                continue
 
-                result = self.Verify.verify_path(path, conditions)
-                if result:
-                    sp, stack = result
-                    for return_to_stack_gadget in additional.values():
-                        sp += return_to_stack_gadget.move
-                    for gadget in path:
-                        if "call" == gadget.insns[-1].split()[0]:
-                            sp -= self.align
-                    sp, stack = self.check_ip_postion(path, conditions, (sp, stack))
-                    out.append(("_".join(modified_regs), (path, sp, stack)))
-                else:
-                    continue
+            path, return_to_stack_gadget, conditions, additional = result
+            additional_conditions.update(additional)
 
-                remain_regs -= modified_regs
-                used_regs |= modified_regs
+            # If conditions'key in Gadget's registers.
+            # Handle this conflict.
+            for conflict_key in conditions.keys():
+                if conflict_key in modified_regs:
+                    modified_regs.remove(conditions.keys()[0])
 
-                if remain_regs:
-                    gadget_list = re_order(gadget_list, remain_regs)
+            for reg in modified_regs:
+                reg64 = reg
 
-        if remain_regs:
-            log.error("Gadget to regs %r not found!" % list(remain_regs))
+                # x64: rax, eax reg[-2:] == ax
+                if self.arch == "amd64":
+                    reg64 = "r" + reg[-2:]
+                conditions[reg64] = values[reg]
 
-        # Top sort to decide the reg order.
-        ordered_out = collections.OrderedDict(sorted(out,
-                      key=lambda t: self._top_sorted.index(t[1][0][-1].address)))
+            result = self.Verify.verify_path(path, conditions)
+            if result:
+                sp, stack = result
+                for return_to_stack_gadget in additional.values():
+                    sp += return_to_stack_gadget.move
+                for gadget in path:
+                    if "call" == gadget.insns[-1].split()[0]:
+                        sp -= self.align
+                sp, stack = self.check_ip_postion(path, conditions, (sp, stack))
+                out.append(("_".join(modified_regs), (path, sp, stack)))
+            else:
+                continue
 
-        ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
+            remain_regs -= modified_regs
+            used_regs |= modified_regs
 
-        return ordered_out
+            if remain_regs:
+                gadget_list = re_order(gadget_list, remain_regs)
+
+    if remain_regs:
+        log.error("Gadget to regs %r not found!" % list(remain_regs))
+
+    # Top sort to decide the reg order.
+    ordered_out = collections.OrderedDict(sorted(out,
+                                                 key=lambda t: self._top_sorted.index(t[1][0][-1].address)))
+
+    ordered_out = self.flat_as_on_stack(ordered_out, additional_conditions)
+
+    return ordered_out
 
     def check_same_origin(self, path, regs):
         """Only check last gadget in path"""
@@ -784,20 +780,18 @@ class ROP(object):
         sources = []
         for reg in regs:
             sources.append(str(last_gadget.regs[reg]))
-
         if len(set(sources)) < len(regs):
             return True
 
         return False
 
-
     def check_ip_postion(self, path, conditions, result):
         sp, stack = result
         large_key = sorted(stack.keys())[-1]
-        large_position = large_key/self.align * self.align
+        large_position = large_key / self.align * self.align
         if (large_position > sp - self.align):
             # Need pop the value on large_position, then return to stack
-            return_to_stack_gadget = self.get_return_to_stack_gadget(move=large_position-sp+2*self.align)
+            return_to_stack_gadget = self.get_return_to_stack_gadget(move=large_position - sp + 2 * self.align)
             conditions[self.PC] = return_to_stack_gadget.address
             result = self.Verify.verify_path(path, conditions)
             sp, stack = result
@@ -808,27 +802,25 @@ class ROP(object):
     def add_blx_pop_for_arm(self):
         """Similaly to simplify() in gadgetfinder.py file.
         """
-        blx_pop_fine    = re.compile(r'^blx r[4-9]; pop \{.*pc\}$')
+        blx_pop_fine = re.compile(r'^blx r[4-9]; pop \{.*pc\}$')
 
         gadgets_list = ["; ".join(gadget.insns) for gadget in self.gadgets.values()]
-        gadgets_dict = {"; ".join(gadget.insns) : gadget for gadget in self.gadgets.values()}
+        gadgets_dict = {"; ".join(gadget.insns): gadget for gadget in self.gadgets.values()}
 
         def re_match(re_exp):
             result = [gadget for gadget in gadgets_list if re_exp.match(gadget)]
-            return sorted(result, key=lambda t:len(t))
+            return sorted(result, key=lambda t: len(t))
 
         match_list = re_match(blx_pop_fine)
 
         return [gadgets_dict[i] for i in match_list]
 
-
     def flat_a_gadget_without_conditions(self, gadget):
-        value_to_flat = {"tail":([gadget],
-                                 gadget.move,
-                                 {})}
+        value_to_flat = {"tail": ([gadget],
+                                  gadget.move,
+                                  {})}
         result = self.flat_as_on_stack(value_to_flat)
         return result["tail"]
-
 
     def handle_non_ret_branch(self, path):
         """If last instruction is call xxx/jmp xxx, Handle this scenairo.
@@ -846,7 +838,7 @@ class ROP(object):
         move = 0
         for gadget in path:
             instr = gadget.insns[-1].split()
-            mnemonic   = instr[0]
+            mnemonic = instr[0]
             if mnemonic == self.CALL or mnemonic == self.JUMP:
                 if mnemonic == "call" and 8 > move:
                     move = 8
@@ -856,7 +848,7 @@ class ROP(object):
         for i in range(len(path)):
             gadget = path[i]
             instr = gadget.insns[-1].split()
-            mnemonic   = instr[0]
+            mnemonic = instr[0]
             if mnemonic == self.CALL or (mnemonic == self.JUMP and instr[1] != exception_operand):
                 pc_reg = gadget.regs[self.PC]
                 return_to_stack_gadget = self.get_return_to_stack_gadget(move=move)
@@ -888,12 +880,13 @@ class ROP(object):
                     # TODO: A problem, set_value_gadget may be overwrited by later's
                     # `set_value_gadget[0] not in front_path` need more testcases
                     if len(set_value_gadget) == 1 and set_value_gadget[0] not in front_path:
-                        if front_path and (not (set(front_path[-1].regs.keys()) - set(set_value_gadget[0].regs.keys()))):
+                        if front_path and (
+                        not (set(front_path[-1].regs.keys()) - set(set_value_gadget[0].regs.keys()))):
                             front_path = front_path[:-1] + set_value_gadget
                         else:
                             front_path += set_value_gadget
                     elif len(set_value_gadget) > 1:
-                        if any([x!=y for x,y in zip(set_value_gadget[::-1], front_path[:i][::-1])]):
+                        if any([x != y for x, y in zip(set_value_gadget[::-1], front_path[:i][::-1])]):
                             front_path += set_value_gadget
 
                     additional["; ".join(gadget.insns)] = return_to_stack_gadget
@@ -910,13 +903,13 @@ class ROP(object):
         if mnemonic == "call":
             RET_GAD = re.compile(r'(pop (.{3}); )+ret$')
         else:
-            RET_GAD = { "i386"  : re.compile(r'(pop (.{3}); )*ret$'),
-                        "amd64" : re.compile(r'(pop (.{3}); )*ret$'),
-                        "arm"   : re.compile(r'^pop \{.*pc\}')}[self.arch]
+            RET_GAD = {"i386": re.compile(r'(pop (.{3}); )*ret$'),
+                       "amd64": re.compile(r'(pop (.{3}); )*ret$'),
+                       "arm": re.compile(r'^pop \{.*pc\}')}[self.arch]
 
         # Find all matched gadgets, choose the shortest one.
         match_list = [gad for gad in self.gadgets.values() if RET_GAD.match("; ".join(gad.insns)) and gad.move >= move]
-        sorted_match_list = sorted(match_list, key=lambda t:len("; ".join(t.insns)))
+        sorted_match_list = sorted(match_list, key=lambda t: len("; ".join(t.insns)))
         if sorted_match_list:
             return sorted_match_list[0]
         else:
@@ -956,7 +949,7 @@ class ROP(object):
                     additional = additional_conditions[gad_instr].move
 
                 # We assume that esp is next to eip, plus `self.align`
-                know[sp + gadget.move + additional - self.align] = path[i+1]
+                know[sp + gadget.move + additional - self.align] = path[i + 1]
 
                 sp += gadget.move + additional
 
@@ -964,12 +957,12 @@ class ROP(object):
             outrop.append(ropgadget[0])
 
             i = 0
-            while i < (move - self.align ) or stack_result:
+            while i < (move - self.align) or stack_result:
                 if i in stack_result.keys():
                     temp_packed = 0
                     for j in range(self.align):
-                        temp_packed += stack_result[i+j] << 8*j
-                        stack_result.pop(i+j)
+                        temp_packed += stack_result[i + j] << 8 * j
+                        stack_result.pop(i + j)
                     outrop.append(temp_packed)
                     i += self.align
                 elif i in know.keys():
@@ -983,7 +976,6 @@ class ROP(object):
 
         out = collections.OrderedDict(out)
         return out
-
 
     def resolve(self, resolvable):
         """Resolves a symbol to an address
@@ -1042,7 +1034,7 @@ class ROP(object):
         if isinstance(object, Gadget):
             return '; '.join(object.insns)
 
-    def build(self, base = None, description = None):
+    def build(self, base=None, description=None):
         """
         Construct the ROP chain into a list of elements which can be passed
         to ``pwnlib.util.packing.flat``.
@@ -1077,7 +1069,7 @@ class ROP(object):
         for idx, slot in iterable:
 
             remaining = len(chain) - 1 - idx
-            address   = stack.next
+            address = stack.next
 
             # Integers can just be added.
             # Do our best to find out what the address is.
@@ -1103,7 +1095,7 @@ class ROP(object):
 
                 registers = [slot.registers[i] for i in sorted(slot.registers.keys())]
                 for register in registers:
-                    value       = slot[register]
+                    value = slot[register]
                     description = self.describe(value)
                     if description:
                         stack.describe('%s = %s' % (register, description))
@@ -1115,16 +1107,16 @@ class ROP(object):
                 stack.describe(self.describe(slot))
 
                 # setRegister cannot handle the Constant object args.
-                slot.args = [ i if not isinstance(i, constants.Constant) else int(i) for i in slot.args]
+                slot.args = [i if not isinstance(i, constants.Constant) else int(i) for i in slot.args]
 
-                registers    = dict(zip(slot.abi.register_arguments, slot.args))
+                registers = dict(zip(slot.abi.register_arguments, slot.args))
                 tail = None
                 operand = ""
                 if remaining and self.arch == "arm":
                     func_tail = self.add_blx_pop_for_arm()
                     for gadget in func_tail:
                         operand = gadget.insns[0].split()[1]
-                        registers.update({operand : slot.target})
+                        registers.update({operand: slot.target})
                         try:
                             tail = self.flat_a_gadget_without_conditions(gadget)
                             setRegisters = self.setRegisters(registers)
@@ -1138,17 +1130,16 @@ class ROP(object):
                 else:
                     setRegisters = self.setRegisters(registers)
 
-
                 for register, gadgets in setRegisters.items():
-                    regs        = register.split("_")
-                    values      = []
+                    regs = register.split("_")
+                    values = []
                     for reg in regs:
                         if reg != self.PC and reg != operand:
                             values.append(registers[reg])
 
-                    slot_indexs  = [slot.args.index(v) for v in values]
+                    slot_indexs = [slot.args.index(v) for v in values]
                     description = " | ".join([self.describe(value) for value in values]) \
-                            or 'arg%r' % slot_indexs
+                                  or 'arg%r' % slot_indexs
                     stack.describe('set %s = %s' % (register, description))
                     stack.extend(gadgets)
 
@@ -1156,7 +1147,7 @@ class ROP(object):
                     stack.describe(slot.name)
 
                 head_or_tail_added = False
-                if self.arch == "arm" and remaining > 0  and tail:
+                if self.arch == "arm" and remaining > 0 and tail:
                     stack.extend(tail)
                     head_or_tail_added = True
 
@@ -1176,9 +1167,9 @@ class ROP(object):
                 if slot.abi.returns:
                     if stackArguments:
                         if remaining:
-                            fix_size  = (1 + len(stackArguments))
+                            fix_size = (1 + len(stackArguments))
                             fix_bytes = fix_size * context.bytes
-                            adjust   = self.search(move = fix_bytes)
+                            adjust = self.search(move=fix_bytes)
 
                             if not adjust:
                                 log.error("Could not find gadget to adjust stack by %#x bytes" % fix_bytes)
@@ -1193,7 +1184,6 @@ class ROP(object):
                         else:
                             stack.describe('<pad>')
                             stack.append(Padding())
-
 
                 for i, argument in enumerate(stackArguments):
 
@@ -1214,8 +1204,8 @@ class ROP(object):
         # are on the stack.  We can now start loading in absolute addresses.
         #
         start = base
-        end   = stack.next
-        size  = (stack.next - base)
+        end = stack.next
+        size = (stack.next - base)
         for i, slot in enumerate(stack):
             slot_address = stack.address + (i * context.bytes)
             if isinstance(slot, (int, long)):
@@ -1247,7 +1237,6 @@ class ROP(object):
 
         return stack
 
-
     def find_stack_adjustment(self, slots):
         self.search(move=slots * context.arch)
 
@@ -1268,9 +1257,7 @@ class ROP(object):
             registers = {}
         registers.update(kw)
 
-
-
-    def call(self, resolvable, arguments = (), abi = None, **kwargs):
+    def call(self, resolvable, arguments=(), abi=None, **kwargs):
         """Add a call to the ROP chain
 
         Arguments:
@@ -1297,11 +1284,9 @@ class ROP(object):
         elif not self._srop_call(resolvable, arguments):
             log.error('Could not resolve %r.' % resolvable)
 
-
-
     def _srop_call(self, resolvable, arguments):
         # Check that the call is a valid syscall
-        resolvable    = 'SYS_' + resolvable.lower()
+        resolvable = 'SYS_' + resolvable.lower()
         syscall_number = getattr(constants, resolvable, None)
         if syscall_number is None:
             return False
@@ -1309,7 +1294,7 @@ class ROP(object):
         log.info_once("Using sigreturn for %r" % resolvable)
 
         # Find an int 0x80 or similar instruction we can use
-        syscall_gadget       = None
+        syscall_gadget = None
         syscall_instructions = srop.syscall_instructions[context.arch]
 
         for instruction in syscall_instructions:
@@ -1321,10 +1306,10 @@ class ROP(object):
 
         # Generate the SROP frame which would invoke the syscall
         with context.local(arch=self.arch):
-            frame         = srop.SigreturnFrame()
-            frame.pc      = syscall_gadget
+            frame = srop.SigreturnFrame()
+            frame.pc = syscall_gadget
             frame.syscall = syscall_number
-            SYS_sigreturn  = constants.SYS_sigreturn
+            SYS_sigreturn = constants.SYS_sigreturn
             for register, value in zip(frame.arguments, arguments):
                 frame[register] = value
 
@@ -1336,7 +1321,6 @@ class ROP(object):
 
         self.raw(call)
         self.raw(frame)
-
 
         # We do not expect to ever recover after the syscall, as it would
         # require something like 'int 0x80; ret' which does not ever occur
@@ -1392,7 +1376,7 @@ class ROP(object):
 
         # TODO: hardcode self.align, only for `ret` and `pop {xx, pc}`
         # Not suitable for ret imm16/call reg/jmp reg
-        condition = {self.SP : next_base + self.align}
+        condition = {self.SP: next_base + self.align}
         result = self.setRegisters(condition)[self.SP]
         for item in result:
             self.raw(item)
@@ -1420,7 +1404,7 @@ class ROP(object):
             if not (regs <= set(gadget.regs)):   continue
             yield gadget
 
-    def search(self, move = 0, regs = None, order = 'size'):
+    def search(self, move=0, regs=None, order='size'):
         """Search for a gadget which matches the specified criteria.
 
         Arguments:
@@ -1488,14 +1472,14 @@ class ROP(object):
         """
         gadget = collections.namedtuple('gadget', ['address', 'details'])
         bad_attrs = [
-            'trait_names',          # ipython tab-complete
-            'download',             # frequent typo
-            'upload',               # frequent typo
+            'trait_names',  # ipython tab-complete
+            'download',  # frequent typo
+            'upload',  # frequent typo
         ]
 
         if attr in self.__dict__ \
-        or attr in bad_attrs \
-        or attr.startswith('_'):
+                or attr in bad_attrs \
+                or attr.startswith('_'):
             raise AttributeError('ROP instance has no attribute %r' % attr)
 
         #
@@ -1509,8 +1493,8 @@ class ROP(object):
 
         if attr in ('int80', 'syscall', 'sysenter'):
             mapping = {'int80': 'int 0x80',
-             'syscall': 'syscall',
-             'sysenter': 'sysenter'}
+                       'syscall': 'syscall',
+                       'sysenter': 'sysenter'}
             for each in self.gadgets:
                 if self.gadgets[each]['insns'] == [mapping[attr]]:
                     return gadget(each, self.gadgets[each])
@@ -1591,8 +1575,8 @@ class ROP(object):
         core_number = cpu_count()
 
         # Need plus one, if not, we will miss some gadgets
-        interval = len(allgadgets)/core_number + 1
-        gad_inputs = [allgadgets[i*interval : (i+1)*interval] for i in range(core_number)]
+        interval = len(allgadgets) / core_number + 1
+        gad_inputs = [allgadgets[i * interval: (i + 1) * interval] for i in range(core_number)]
 
         arguments = zip(gad_inputs,
                         repeat(gadgets),
@@ -1602,7 +1586,7 @@ class ROP(object):
 
         result = pool.map(build_graph_single, arguments)
 
-        results = reduce(lambda x, y: x+y, result)
+        results = reduce(lambda x, y: x + y, result)
 
         for x in results:
             G.add_edge(*x)
@@ -1618,11 +1602,11 @@ class ROP(object):
         start = set()
         for gadget in self.gadgets.values():
             gadget_srcs = []
-            for k,i in gadget.regs.items():
-                if isinstance(i , Mem):
+            for k, i in gadget.regs.items():
+                if isinstance(i, Mem):
                     gadget_srcs.append(i.reg)
                 elif isinstance(i, list):
-                    if all([k!=j for j in i]):
+                    if all([k != j for j in i]):
                         gadget_srcs.extend([str(x) for x in i])
                 elif isinstance(i, str):
                     if k != i:
@@ -1642,7 +1626,7 @@ class ROP(object):
             gadget_dsts = []
             for k, i in gadget.regs.items():
                 if isinstance(i, list):
-                    if all([k!=j for j in i]):
+                    if all([k != j for j in i]):
                         gadget_dsts.append(k)
                 elif isinstance(i, str):
                     if k != i:
@@ -1665,7 +1649,7 @@ class ROP(object):
         if len(start) != 0 and len(end) != 0:
             for s in list(start):
                 for e in list(end):
-                    if s.address  == e.address:
+                    if s.address == e.address:
                         paths.append([s.address])
                     else:
                         try:
@@ -1686,18 +1670,18 @@ class ROP(object):
         paths = outs
 
         paths = sorted(paths,
-                key=lambda path: len(" + ".join(["; ".join(gad.insns) for gad in path])))[:10]
+                       key=lambda path: len(" + ".join(["; ".join(gad.insns) for gad in path])))[:10]
 
         # Give every reg a random num
         cond = {}
         for reg in regs:
-            cond[reg] = random.randint(2**16, 2**32)
+            cond[reg] = random.randint(2 ** 16, 2 ** 32)
 
             # x64: rax, eax reg[-2:] == ax
             if self.arch == "amd64":
                 reg64 = "r" + reg[-2:]
                 if reg != reg64:
-                    cond[reg64] = random.randint(2**16, 2**32)
+                    cond[reg64] = random.randint(2 ** 16, 2 ** 32)
 
         # Solve this gadgets arrangement, if stack's value not changed, ignore it.
         path_filted = []
@@ -1709,7 +1693,7 @@ class ROP(object):
         return path_filted
 
 
-def build_graph_single((gad_inputs, gadgets, gadget_input)):
+def build_graph_single(gad_inputs, gadgets, gadget_input):
     """Child process for build_graph() method.
     """
     edges = []

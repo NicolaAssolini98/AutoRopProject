@@ -9,21 +9,22 @@ import hashlib
 import tempfile
 import operator
 
-from ..context  import context, LocalContext
-from ..asm     import *
-from ..log     import getLogger
-from ..elf     import ELF
+
+from logging import getLogger
+
+from pwnlib.context import LocalContext, context
+
 from .gadgets  import Gadget, Mem
 
 from multiprocessing import Pool
-from BTrees.OOBTree import OOBTree
-from amoco.cas.expressions import *
 from z3          import *
 from collections import OrderedDict
 from operator    import itemgetter
 from capstone    import CS_ARCH_X86, CS_ARCH_ARM, CS_MODE_32, CS_MODE_64, CS_MODE_ARM, CS_MODE_THUMB
 from capstone    import Cs, CS_GRP_JUMP, CS_GRP_RET, CS_GRP_CALL, CS_GRP_INT, CS_GRP_IRET
 from itertools   import repeat
+
+context.arch = 'amd64'
 
 log = getLogger(__name__)
 
@@ -699,7 +700,7 @@ def find_all_gadgets_multi_process(section, gadget_re, elf, arch, mode, need_fil
     return gadgets
 
 
-def find_single((raw_data, pvaddr, elftype, elf_base_addr, arch, mode, gad, need_filter, ref)):
+def find_single(raw_data, pvaddr, elftype, elf_base_addr, arch, mode, gad, need_filter, ref):
     C_OP = 0
     C_SIZE = 1
     C_ALIGN = 2

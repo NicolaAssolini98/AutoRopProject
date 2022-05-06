@@ -161,12 +161,14 @@ Mipsel Example:
 
 from collections import namedtuple
 
-from ..abi import ABI
-from ..context import context, LocalContext
-from ..log import getLogger
-from ..util.packing import flat
-from ..util.packing import pack
-from ..util.packing import unpack_many
+
+from logging import getLogger
+from struct import pack
+
+from pwnlib.abi import ABI
+from pwnlib.context import LocalContext, context
+
+context.arch = 'amd64'
 
 log = getLogger(__name__)
 
@@ -409,7 +411,7 @@ class SigreturnFrame(dict):
     @property
     def arguments(self):
         # Skip the register used to hold the syscall number
-        return ABI.syscall(arch=self.arch).register_arguments[1:]
+        return A0BI.syscall(arch=self.arch).register_arguments[1:]
 
     @property
     def sp(self):
