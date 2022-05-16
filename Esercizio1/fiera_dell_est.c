@@ -48,7 +48,6 @@ void bastone() {
     asm("pop %ecx");
 }
 
-
 int main() {
     setvbuf(stdin, 0, 2, 0);
     setvbuf(stdout, 0, 2, 0);
