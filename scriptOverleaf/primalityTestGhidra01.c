@@ -1,6 +1,4 @@
-void FUN_0804872d(void)
-
-{
+void FUN_0804872d(void) {
   char *pcVar1;
   size_t sVar2;
   int iVar3;
@@ -11,9 +9,10 @@ void FUN_0804872d(void)
   printf("Enter a number: ");
   pcVar1 = fgets(local_50,0x200,stdin);
   if (pcVar1 == (char *)0x0) {
-                    /* WARNING: Subroutine does not return */
     exit(1);
   }
-  [...]
+
+  //[...]
+
   return;
 }

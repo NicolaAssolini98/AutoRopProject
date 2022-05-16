@@ -1,7 +1,10 @@
 from ropium import *
+
+# Load binary
 rop = ROPium(ARCH.X64)
 rop.load('/lib/x86_64-linux-gnu/libc-2.27.so')
 
+# Build the ROP chain
 chain = rop.compile('rbx = [rax + 0x20]')
 
 print(chain.dump())
