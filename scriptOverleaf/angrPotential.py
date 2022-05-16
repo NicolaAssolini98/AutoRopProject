@@ -22,6 +22,9 @@ chain = rop.func_call("read", [0, 0x804f000, 0x100])
 # adding values to memory
 chain = rop.add_to_mem(0x804f124, 0x41414141)
 
+# do system call number num, with args = [arg1, ...]
+chain = rop.do_syscall(num, [arg1, ...])
+
 # chains can be added together to chain operations
 chain = rop.write_to_mem(0x61b100, b"/home/ctf/flag\x00") + \
     rop.func_call("open", [0x61b100,os.O_RDONLY]) + \
