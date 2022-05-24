@@ -1,8 +1,8 @@
 Prima demo Ropper:
- 1) Ropper potential su shell con un binario che abbia senso
- 2) man_exploitpy
- 3) es1_man_exploit.py
- 4) es2_man_exploit.py
+ 1) Ropper potential su shell
+ 2) man_exploit.py con searchGadgetEsRopper.sh
+ 3) es1_man_exploit.pyc con searchGadgetEs1Ropper.sh
+ 4) es2_man_exploit.py con searchGadgetEs2Ropper.sh
 
 Seconda demo Ropium:
  1) Ropium potential
@@ -15,3 +15,4 @@ Terza demo angr:
  2) angr_exploit.py
  3) es1_angr_exploit.py
  4) es2_angr_exploit.py
+ 5) hardAngrExpolitPartial.py facendo magari accenno ad hardAngrExpolit.py per far vedere la complessità del codice
