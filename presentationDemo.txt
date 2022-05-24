@@ -1,0 +1,17 @@
+Prima demo Ropper:
+ 1) Ropper potential su shell con un binario che abbia senso
+ 2) man_exploitpy
+ 3) es1_man_exploit.py
+ 4) es2_man_exploit.py
+
+Seconda demo Ropium:
+ 1) Ropium potential
+ 2) ropm_exploit.py
+ 3) es1_ropm_exploit.py
+ 4) es2_ropm_exploit.py
+
+Terza demo angr:
+ 1) angr potential
+ 2) angr_exploit.py
+ 3) es1_angr_exploit.py
+ 4) es2_angr_exploit.py
