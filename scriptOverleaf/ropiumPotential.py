@@ -9,9 +9,9 @@ chain = rop.compile('rbx = [rax + 0x20]')
 
 print(chain.dump())
 # output:
-0x000000000009a851 (sub rax, 0x10; ret)
-0x0000000000130018 (mov rax, qword ptr [rax + 0x30]; ret)
-0x0000000000052240 (push rax; pop rbx; ret)
+#0x000000000009a851 (sub rax, 0x10; ret)
+#0x0000000000130018 (mov rax, qword ptr [rax + 0x30]; ret)
+#0x0000000000052240 (push rax; pop rbx; ret)
 
 print(chain.dump('python'))
 # output:
